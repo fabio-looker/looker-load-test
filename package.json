@@ -1,0 +1,11 @@
+{
+  "name": "looker-load-test",
+  "version": "0.0.0",
+  "description": "Load test a Looker instance via Google Cloud Functions",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Fabio Beltramini",
+  "license": "UNLICENSED"
+}
