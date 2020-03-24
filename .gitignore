@@ -1,3 +1,6 @@
 node_modules
 user_ids.txt
+*.user_ids.txt
 config.js
+*.config.js
+reports/*

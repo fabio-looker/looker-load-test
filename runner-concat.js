@@ -1,12 +1,66 @@
-const defaultHttps = require('https')
+const asyncPool = require("tiny-async-pool")
+//const userScript = require("./user-script.js")
+const {performance } = require('perf_hooks')
 
-module.exports = LookerServiceApi
-
-function tryJsonParse(str,dft){
-	try{return JSON.parse(str)}
-	catch(e){return dft}
+module.exports.runner = async function runner(req,res){
+	const start = new Date()
+	try {
+		const {userIds,host,adminId,adminSecret,userConcurrency,lookSequence,format} = req && req.body	|| {}
+		console.log({userIds,host,adminId,adminSecret:adminSecret.length,userConcurrency})
+		const adminApi = LookerApi({host, clientId:adminId, asyncClientSecret:adminSecret})
+		await adminApi('user') //Triggers the authentication step 
+		const users = await asyncPool(userConcurrency, userIds, user => (
+			async function(){
+				const start = new Date()
+				const userReturn = await userScript({user,adminApi,host,lookSequence,format})
+				const end = new Date()
+				return {
+					user,
+					/*...userReturn,*/
+					userStart: start.toISOString(),
+					userEnd: end.toISOString(),
+					elapsedSeconds: (end.getTime() - start.getTime())/1000
+					}
+				}()
+			))
+		const end = new Date()
+		res.json({
+			ok: true,
+			runnerStart: start.toISOString(),
+			runnerEnd: end.toISOString(),
+			elapsedSeconds: (end.getTime() - start.getTime())/1000,
+			users
+			})
+		}
+	catch(e){
+		const end = new Date()
+		console.error(e)
+		res.json({
+			ok: false,
+			error: /*e.toJSON ? e.toJSON() :*/ e.toString(),
+			runnerStart: start.toISOString(),
+			runnerEnd: end.toISOString()
+			})
+		}
+	}
+	
+async function userScript({
+		userId, adminApi, host,
+		lookSequence = [],
+		format = "json"
+	}){
+	//const agent = new https.Agent({})
+	//const userId = await adminApi(`users/credential/embed/${user}.id`)
+	const userAuth = await adminApi(`POST login/${userId}`)
+	const api = LookerApi({host, token:userAuth.access_token})
+	for(look of lookSequence){
+		await api(`looks/${look}/run/${format}`)
+		}
+	return userId
 	}
 
+// ./lib/looker-api.js
+const https = require('https')
 const noop = ()=>{}
 const defaultConsole = {
 	debug:noop,
@@ -16,15 +70,20 @@ const defaultConsole = {
 	error:console.error.bind(console)
 	}
 
-function LookerServiceApi({
+function tryJsonParse(str,dft){
+	try{return JSON.parse(str)}
+	catch(e){return dft}
+	}
+
+function LookerApi({
 		host,
 		token,
 		clientId,
 		asyncClientSecret,
 		apiVersion = "3.1",
-		console = defaultConsole,
-		https = defaultHttps
+		console = defaultConsole
 	}={}){
+	
 	const hostMatch = host && host.match(/^([^\/:]+)\:?(\d*)$/)
 	if(!hostMatch){
 		throw "API_HOST must specify a host"
@@ -73,7 +132,9 @@ function LookerServiceApi({
 			const headers = {
 					...(isAuthValid(auth)?{'Authorization': 'token '+auth.accessToken}:{})
 				}
-			const response = await request({...stagedRequest,headers})
+			let response
+			try{response = await request({...stagedRequest,headers})}
+			catch(e){throw {request:stagedRequest,...e}}
 			//console.debug("Response:",response.statusCode, response.body)
 			if(response && response.statusCode == 401 && authStep!="skip"){
 				// Retry failure once, to catch auth expiration issues, if not 'skip' mode
@@ -83,6 +144,7 @@ function LookerServiceApi({
 				}
 			if(!response || !response.statusCode || response.statusCode>=400){
 				throw {
+					request:stagedRequest,
 					status:response && response.statusCode,
 					body:response && response.body
 					}
@@ -123,14 +185,16 @@ function LookerServiceApi({
 			body,
 			contentType
 		}){
-		const bodyString = body && (
-			contentType == "application/json" ? JSON.stringify(body)
-			: contentType == "application/x-www-form-urlencoded" && body && !(body instanceof String)
+		const bodyString = 
+			contentType == "application/json"
+				? JSON.stringify(body||{})
+				:
+			contentType == "application/x-www-form-urlencoded" && body && !(body instanceof String)
 				? Object.entries(body)
 					.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v))
 					.join("&")
-			: body
-			)
+				:
+			body || ""
 			
 		return await new Promise((res,rej)=>{
 			let requestConfig = {
@@ -174,4 +238,5 @@ function LookerServiceApi({
 			req.end()
 			})
 		}
+	
 	}
